@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Among Us Multiplayer 2D</title>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<style>
+    body, html { margin:0; padding:0; overflow:hidden; background:#1e272e; touch-action:none; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    canvas { display:block; }
+    #joystick { position:absolute; bottom:50px; left:50px; width:120px; height:120px; background:rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.2); border-radius:50%; z-index:10; touch-action: none; }
+    #stick { position:absolute; left:40px; top:40px; width:40px; height:40px; background:rgba(255,255,255,0.5); border-radius:50%; pointer-events: none; }
+    #ui { position:absolute; top:20px; left:20px; background:rgba(0,0,0,0.7); color:white; padding:15px; border-radius:12px; z-index: 70; border: 1px solid #444; }
+    #setup { position:absolute; top:0; left:0; width:100%; height:100%; background:#121212; color:white; display:flex; flex-direction:column; justify-content:center; align-items:center; z-index:100; }
+    h1 { letter-spacing: 5px; color: #ff3f34; margin-bottom: 20px; }
+    input { padding: 12px; margin: 8px; border-radius: 8px; border: 2px solid #333; width: 220px; background: #222; color: white; outline: none; }
+    input:focus { border-color: #4CAF50; }
+    button { padding: 12px 25px; margin: 10px; cursor: pointer; border-radius: 8px; border: none; font-weight: bold; color: white; transition: 0.2s; }
+    button:hover { opacity: 0.8; transform: scale(1.05); }
+</style>
+</head>
+<body>
+
+<div id="setup">
+    <h1>AMONG US 2D</h1>
+    <input type="text" id="nameIn" placeholder="Seu Nome" value="Tripulante">
+    <input type="text" id="roomIn" placeholder="ID da Sala" value="sala777">
+    <div style="display: flex;">
+        <button onclick="iniciar(true)" style="background:#4CAF50;">CRIAR SALA</button>
+        <button onclick="iniciar(false)" style="background:#2196F3;">ENTRAR NA SALA</button>
+    </div>
+    <p style="font-size: 12px; color: #666; margin-top: 20px;">Use dois navegadores para testar sozinho!</p>
+</div>
+
+<div id="ui" style="display:none;">
+    <div id="status" style="font-weight: bold; color: #0be881;">Iniciando...</div>
+    <div id="playerCount">Jogadores: 1</div>
+</div>
+
+<canvas id="game"></canvas>
+<div id="joystick"><div id="stick"></div></div>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+let peer, isHost, myId, roomName;
+let players = {};
+let connections = []; 
+let ready = false;
+
+function iniciar(hostMode) {
+    isHost = hostMode;
+    const nome = document.getElementById("nameIn").value || "Player";
+    roomName = document.getElementById("roomIn").value || "sala777";
+    
+    myId = isHost ? roomName : "p_" + Math.random().toString(36).substr(2, 9);
+    
+    // Cores vibrantes do Among Us
+    const cores = ['#c51111', '#132ed1', '#117f2d', '#ed54ba', '#ef7d0d', '#f5f5f7', '#3947a1', '#71491e'];
+    const minhaCor = cores[Math.floor(Math.random() * cores.length)];
+
+    players[myId] = { 
+        id: myId, name: nome, 
+        x: Math.random() * 400 + 100, y: Math.random() * 400 + 100, 
+        color: minhaCor,
+        facingLeft: false 
+    };
+
+    document.getElementById("setup").style.display = "none";
+    document.getElementById("ui").style.display = "block";
+
+    peer = new Peer(myId);
+    
+    peer.on('open', (id) => {
+        if(isHost) {
+            document.getElementById("status").innerHTML = "HOST: " + id;
+            ready = true;
+        } else {
+            document.getElementById("status").innerHTML = "Conectando...";
+            setupConn(peer.connect(roomName));
+        }
+    });
+
+    peer.on('connection', conn => setupConn(conn));
+}
+
+function setupConn(conn) {
+    conn.on('open', () => {
+        if(isHost) connections.push(conn);
+        else { connections = [conn]; ready = true; document.getElementById("status").innerHTML = "Conectado!"; }
+        conn.send({ type: 'join', p: players[myId] });
+    });
+
+    conn.on('data', data => {
+        if(data.type === 'join') {
+            players[data.p.id] = data.p;
+            if(isHost) broadcast({ type: 'sync_all', all: players });
+        }
+        if(data.type === 'sync_all') {
+            for(let id in data.all) if(id !== myId) players[id] = data.all[id];
+        }
+        if(data.type === 'move') {
+            if(data.id !== myId && players[data.id]) {
+                players[data.id].x = data.x;
+                players[data.id].y = data.y;
+                players[data.id].facingLeft = data.facingLeft;
+            }
+            if(isHost) broadcast(data, conn.peer);
+        }
+        document.getElementById("playerCount").innerText = "Jogadores: " + Object.keys(players).length;
+    });
+}
+
+function broadcast(msg, ignoreId) {
+    connections.forEach(c => { if(c.peer !== ignoreId && c.open) c.send(msg); });
+}
+
+// --- DESENHO DO PERSONAGEM ---
+function drawPlayer(p, ox, oy) {
+    const x = p.x - ox;
+    const y = p.y - oy;
+    const size = 30;
+    const flip = p.facingLeft ? -1 : 1;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(flip, 1);
+
+    // Mochila
+    ctx.fillStyle = p.color;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "black";
+    ctx.beginPath();
+    ctx.roundRect(-size * 0.8, -size * 0.2, size * 0.4, size * 0.7, 5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Corpo
+    ctx.beginPath();
+    ctx.arc(0, -size * 0.5, size * 0.6, Math.PI, 0);
+    ctx.lineTo(size * 0.6, size * 0.5);
+    ctx.lineTo(-size * 0.6, size * 0.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Pernas
+    ctx.beginPath();
+    ctx.roundRect(-size * 0.6, size * 0.4, size * 0.4, size * 0.4, 5);
+    ctx.roundRect(size * 0.2, size * 0.4, size * 0.4, size * 0.4, 5);
+    ctx.fill();
+    ctx.stroke();
+
+    // Visor
+    ctx.fillStyle = "#add8e6";
+    ctx.beginPath();
+    ctx.roundRect(0, -size * 0.7, size * 0.6, size * 0.4, 10);
+    ctx.fill();
+    ctx.stroke();
+
+    // Brilho do visor
+    ctx.fillStyle = "white";
+    ctx.beginPath();
+    ctx.roundRect(size * 0.2, -size * 0.65, size * 0.2, size * 0.1, 5);
+    ctx.fill();
+
+    ctx.restore();
+
+    // Nome (sem flip)
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = 3;
+    ctx.font = "bold 14px Arial";
+    ctx.textAlign = "center";
+    ctx.strokeText(p.name + (p.id === myId ? " (Você)" : ""), x, y - size * 1.3);
+    ctx.fillText(p.name + (p.id === myId ? " (Você)" : ""), x, y - size * 1.3);
+}
+
+// --- CONTROLES ---
+let joy = { dx: 0, dy: 0 };
+let isDragging = false;
+const joyEl = document.getElementById("joystick");
+const stickEl = document.getElementById("stick");
+
+function handleMove(e) {
+    if (!isDragging && !e.touches) return;
+    const rect = joyEl.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const x = clientX - rect.left - 60;
+    const y = clientY - rect.top - 60;
+    const dist = Math.sqrt(x*x + y*y);
+    const ang = Math.atan2(y, x);
+    const m = Math.min(dist, 40);
+    joy.dx = Math.cos(ang) * (m/40);
+    joy.dy = Math.sin(ang) * (m/40);
+    stickEl.style.transform = `translate(${joy.dx*40}px, ${joy.dy*40}px)`;
+}
+
+joyEl.addEventListener("touchstart", (e) => { isDragging = true; handleMove(e); }, {passive: false});
+joyEl.addEventListener("touchmove", handleMove, {passive: false});
+joyEl.addEventListener("touchend", () => { isDragging = false; joy = {dx:0, dy:0}; stickEl.style.transform = "translate(0,0)"; });
+joyEl.addEventListener("mousedown", (e) => { isDragging = true; handleMove(e); });
+window.addEventListener("mousemove", (e) => { if(isDragging) handleMove(e); });
+window.addEventListener("mouseup", () => { isDragging = false; joy = {dx:0, dy:0}; stickEl.style.transform = "translate(0,0)"; });
+
+function loop() {
+    requestAnimationFrame(loop);
+    if(!ready || !players[myId]) return;
+
+    if(joy.dx !== 0 || joy.dy !== 0) {
+        players[myId].x += joy.dx * 5;
+        players[myId].y += joy.dy * 5;
+        if(joy.dx < 0) players[myId].facingLeft = true;
+        if(joy.dx > 0) players[myId].facingLeft = false;
+        
+        const moveData = { type: 'move', id: myId, x: players[myId].x, y: players[myId].y, facingLeft: players[myId].facingLeft };
+        if(isHost) broadcast(moveData, null);
+        else if(connections[0]) connections[0].send(moveData);
+    }
+
+    // Desenha o fundo
+    ctx.fillStyle = "#1e272e";
+    ctx.fillRect(0,0,canvas.width, canvas.height);
+    
+    // Desenha estrelas simples
+    ctx.fillStyle = "white";
+    for(let i=0; i<20; i++) {
+        ctx.fillRect((i*150) % canvas.width, (i*230) % canvas.height, 2, 2);
+    }
+
+    const ox = players[myId].x - canvas.width/2;
+    const oy = players[myId].y - canvas.height/2;
+
+    for(let id in players) {
+        drawPlayer(players[id], ox, oy);
+    }
+}
+loop();
+</script>
+</body>
+</html>
